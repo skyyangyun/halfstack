@@ -20,7 +20,7 @@ interface HalfstackConfig {
     apiDirectory?: string
 }
 
-let docResponse: Response
+let docPageBlob: Blob
 export default class Halfstack {
     #httpServer?: HttpServer
     routeList: Route[] = []
@@ -108,11 +108,8 @@ export default class Halfstack {
     }
 
     async #handleAPIDocs() {
-        if (!docResponse) {
-            const stream = await fetch(import.meta.resolve('./swagger.html')).then(response => response.body)
-            docResponse = new Response(stream)
-        }
-        return docResponse
+        docPageBlob ??= await fetch(import.meta.resolve('./swagger.html')).then(response => response.blob())
+        return new Response(docPageBlob)
     }
 
     async #handleOpenAPI() {
