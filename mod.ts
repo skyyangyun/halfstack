@@ -107,7 +107,7 @@ export default class Halfstack {
 
     async #handleAPIDocs() {
         const url = new URL(import.meta.resolve('./swagger.html'))
-        const file = await Deno.open(url.pathname)
+        const file = await Deno.open(url.protocol === 'file:' ? url.pathname : url.href)
         return new HTMLResponse(file.readable)
     }
 
