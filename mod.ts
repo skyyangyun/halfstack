@@ -19,6 +19,8 @@ interface HalfstackConfig {
     docPath?: string
     apiDirectory?: string
 }
+
+let docResponse: Response
 export default class Halfstack {
     #httpServer?: HttpServer
     routeList: Route[] = []
@@ -105,8 +107,12 @@ export default class Halfstack {
         throw new Error('没有转换器')
     }
 
-    #handleAPIDocs() {
-        return fetch(import.meta.resolve('./swagger.html'))
+    async #handleAPIDocs() {
+        if (!docResponse) {
+            const stream = await fetch(import.meta.resolve('./swagger.html')).then(response => response.body)
+            docResponse = new Response(stream)
+        }
+        return docResponse
     }
 
     async #handleOpenAPI() {
