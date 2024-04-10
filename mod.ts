@@ -105,10 +105,8 @@ export default class Halfstack {
         throw new Error('没有转换器')
     }
 
-    async #handleAPIDocs() {
-        const url = new URL(import.meta.resolve('./swagger.html'))
-        const file = await Deno.open(url.protocol === 'file:' ? url.pathname : url.href)
-        return new HTMLResponse(file.readable)
+    #handleAPIDocs() {
+        return fetch(import.meta.resolve('./swagger.html'))
     }
 
     async #handleOpenAPI() {
