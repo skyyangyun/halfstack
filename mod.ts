@@ -47,23 +47,27 @@ export default class Halfstack {
     }
 
     async #loadRoutes(path: string) {
+        const tasks = []
         for await (const entry of Deno.readDir(path)) {
             const { name, isDirectory, isFile } = entry
             const fullPath = `${path}/${name}`
+
             if (isDirectory) {
-                this.#loadRoutes(fullPath)
+                tasks.push(this.#loadRoutes(fullPath))
                 continue
             }
 
-            if (!isFile || /.(js)|(ts)$/.test(name)) continue
+            if (!/.(js)|(ts)$/.test(name)) continue
 
-            import(fullPath).then((module: Record<string, Function>) => {
+            const parseTask = import(fullPath).then((module: Record<string, Function>) => {
                 for(const handle of Object.values(module)) {
                     if(!('route' in handle)) continue
                     this.addRoute(handle.route as RouteMeta, handle)
                 }
             })
+            tasks.push(parseTask)
         }
+        await Promise.all(tasks)
     }
 
     listen(options = {}) {
@@ -82,24 +86,45 @@ export default class Halfstack {
         const url = new URL(request.url)
         const { pathname } = url
 
-        let matched: Route
-        for(const route of this.routeList) {
-            const { path} = route
+        // path filter
+        let list = this.routeList.filter(({ path }) => {
             const regexp = new RegExp(`^${path}(\/)?$`)
-            if(!regexp.test(pathname)) continue
+            return regexp.test(pathname)
+        })
+        if (!list.length) return new Response(null,{status: STATUS_CODE.NotFound})
 
-            const { contentType } = route
-            if(contentType && !accepts(request, contentType)) continue
+        // method filter
+        list = list.filter(({ method }) => {
+            if(!method) return true
+            return method === request.method
+        })
+        if (!list.length) return new Response(null,{status: STATUS_CODE.MethodNotAllowed})
 
-            if(matched && contentType !== accepts(request)[0]) continue
-            matched = route
-        }
+        // content type filter
 
-        if (!matched) return new Response(null,{status: STATUS_CODE.NotFound})
+        const matched = acceptMatch(list, request)
+
+        if (!matched) return new Response(null,{status: STATUS_CODE.NotAcceptable})
 
         const { contentType } = matched
+
+        const search: Record<string, string> = {}
+        for(const [key, value] of url.searchParams) {
+            search[key] = value
+        }
+
+        const data = request.headers.get("content-type") === 'application/json' ? await request.json() : null
+
         const { handle } = matched
-        const result = await handle(request)
+        const context = {
+            request,
+            params: {},
+            search,
+            data,
+            body: null,
+        }
+
+        const result = await handle(context)
         if (result instanceof Response) return result
         if (!contentType || contentType === 'application/json') return new JSONResponse(result)
         if (contentType === 'text/plain') return new TextResponse(result)
@@ -137,7 +162,7 @@ export default class Halfstack {
             route.handle = handle
         }
 
-        if(!route.path.startsWith('/')) throw new Error('Path must start with a /')
+        if(!route.path.startsWith('/')) throw new Error('Path must start with /')
 
         this.routeList.push(route)
     }
@@ -151,12 +176,16 @@ export class Router {
 
 export class TextResponse extends Response {
     constructor(text: BodyInit) {
-        super(text);
+        super(text, {
+            headers: {
+                "Content-Type": "text/plain"
+            }
+        });
     }
 }
 
-export class JSONResponse extends Response {
-    constructor(data: any) {
+export class JSONResponse<T> extends Response {
+    constructor(data: T) {
         super(JSON.stringify(data), {
             headers: {
                 "Content-Type": "application/json"
@@ -173,4 +202,17 @@ export class HTMLResponse extends Response {
             }
         });
     }
+}
+
+
+function acceptMatch(list: Route[], request: Request): Route | undefined {
+    if(list.length < 2) return list[0]
+    const typeList: string[] = []
+    for(const { contentType } of list) {
+        if (contentType) {
+            typeList.push(contentType)
+        }
+    }
+    const type = accepts(request, ...typeList)
+    return list.find(route => route.contentType === type)
 }
