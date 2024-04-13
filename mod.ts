@@ -3,8 +3,6 @@ import {
 } from "https://deno.land/std/http/status.ts";
 import { accepts } from "https://deno.land/std/http/mod.ts";
 
-import HttpServer = Deno.HttpServer;
-
 interface RouteMeta {
     path: string
     method?: string
@@ -23,7 +21,7 @@ interface HalfstackConfig {
 
 let docPageBlob: Blob
 export default class Halfstack {
-    #httpServer?: HttpServer
+    #httpServer?: Deno.HttpServer
     routeList: Route[] = []
     config: Record<string, any>
 
@@ -45,14 +43,14 @@ export default class Halfstack {
         // load api routes
         if (typeof apiDirectory !=='string') throw new Error('apiDirectory must be a string')
         if (apiDirectory.startsWith('/')) throw new Error('apiDirectory can not start with / . It can not start root directory, must start from current directory')
-        this.#loadRoutes(`${Deno.cwd()}/${apiDirectory}`)
+        this.#loadRoutes(`file://${Deno.cwd()}/${apiDirectory}`)
     }
 
     async #loadRoutes(path: string) {
         const tasks = []
         for await (const entry of Deno.readDir(path)) {
             const { name, isDirectory } = entry
-            const fullPath = `file://${path}/${name}`
+            const fullPath = `${path}/${name}`
 
             if (isDirectory) {
                 tasks.push(this.#loadRoutes(fullPath))
@@ -61,11 +59,7 @@ export default class Halfstack {
 
             if (!/.(js)|(ts)$/.test(name)) continue
 
-            console.debug('load module', fullPath)
-
             const parseTask = await import(fullPath).then((module: Record<string, LooseHandler>) => {
-                console.debug('load module done', module)
-                debugger
                 for(const handle of Object.values(module)) {
                     if(!('route' in handle)) continue
                     this.addRoute(handle.route as RouteMeta, handle)
