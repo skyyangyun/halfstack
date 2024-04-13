@@ -11,32 +11,37 @@ interface RouteMeta {
     parameters?: any[]
 }
 interface Route extends RouteMeta {
-    handle: LooseHandler
+    handler: Handler
 }
 
 interface HalfstackConfig {
     docPath?: string
-    apiDirectory?: string
+    apiDir?: string | { dir: string, prefix: string}
 }
 
 interface HalfContext {
     request: Request
 }
 
-let docPageBlob: Blob
+let docPage: string
 export default class Halfstack {
     #httpServer?: Deno.HttpServer
+    routerList: Router[] = []
     routeList: Route[] = []
-    config: HalfstackConfig
+    config: Required<HalfstackConfig>
 
     constructor(config: HalfstackConfig = {}) {
         this.config = config = {
             docPath: '/',
-            apiDirectory: 'api',
+            apiDir: 'api',
             ...config
         }
 
-        const { docPath, apiDirectory } = config
+        if(typeof config.apiDir === 'string') {
+            config.apiDir = {dir: 'api', prefix: ''}
+        }
+
+        const { docPath, apiDir } = config
 
         // add docs routes
         if (typeof docPath !== 'string')
@@ -45,28 +50,30 @@ export default class Halfstack {
         this.addRoute({ path: docPath, contentType: 'application/json', }, this.#handleOpenAPI.bind(this))
 
         // load api routes
-        if (typeof apiDirectory !=='string') throw new Error('apiDirectory must be a string')
-        if (apiDirectory.startsWith('/')) throw new Error('apiDirectory can not start with / . It can not start root directory, must start from current directory')
-        this.#loadRoutes(`${Deno.cwd()}/${apiDirectory}`)
+        ;[apiDir!].forEach(({dir, prefix}) => {
+            this.loadRoutes(`${Deno.cwd()}/${dir}`, prefix)
+        })
     }
 
-    async #loadRoutes(path: string) {
+    async loadRoutes(path: string, prefix = '') {
         const tasks = []
         for await (const entry of Deno.readDir(path)) {
             const { name, isDirectory } = entry
             const fullPath = `${path}/${name}`
 
             if (isDirectory) {
-                tasks.push(this.#loadRoutes(fullPath))
+                tasks.push(this.loadRoutes(fullPath))
                 continue
             }
 
             if (!/.(js)|(ts)$/.test(name)) continue
 
-            const parseTask = import(`file://${fullPath}`).then((module: Record<string, LooseHandler>) => {
-                for(const handle of Object.values(module)) {
-                    if(!('route' in handle)) continue
-                    this.addRoute(handle.route as RouteMeta, handle)
+            const parseTask = import(`file://${fullPath}`).then((module: Record<string, Handler & {route?: RouteMeta}>) => {
+                for(const handler of Object.values(module)) {
+                    const { route } = handler
+                    if(!route) continue
+                    route.path = prefix + route.path
+                    this.addRoute(handler.route as RouteMeta, handler)
                 }
             })
             tasks.push(parseTask)
@@ -87,8 +94,8 @@ export default class Halfstack {
     }
 
     #handleMiddleware(request: Request) {
-        const inner: Handler = (context: HalfContext) => this.#handleRequest(context.request)
-        const reducer = (next: Handler, middleware: Middleware) => (context: HalfContext) => middleware(context, next)
+        const inner: TightHandler = (context: HalfContext) => this.#handleRequest(context.request)
+        const reducer = (next: TightHandler, middleware: Middleware) => (context: HalfContext) => middleware(context, next)
         const outer = this.#middlewareList.reduce(reducer, inner)
         return outer({request})
     }
@@ -97,15 +104,27 @@ export default class Halfstack {
         const url = new URL(request.url)
         const { pathname } = url
 
+        let list: Route[]
         let params: Record<string, string> | undefined = undefined
+
+        // router filter
+        const router = this.routerList.find(
+            ({ config: { prefix, exclude }}) => !exclude.includes(pathname) && pathname.startsWith(prefix)
+        )
+        if (router) {
+            list = router.routeList
+        }
+        debugger
+
         // path filter
-        let list = this.routeList.filter(({ path }) => {
+        list ??= this.routeList.filter(({ path }) => {
             const regexp = new RegExp(`^${path.replaceAll(/\{(\w+)}/g, '(?<$1>[^/]+)')}(?:\/)?$`);
             const match = pathname.match(regexp);
             if(!match) return false
             params = match.groups
             return true
         })
+
         if (!list.length) return new Response(null,{status: STATUS_CODE.NotFound})
 
         // method filter
@@ -145,7 +164,7 @@ export default class Halfstack {
             }
         }
 
-        const { handle } = matched
+        const { handler } = matched
         const context = {
             request,
             params: params as Record<string, any> | undefined,
@@ -155,7 +174,7 @@ export default class Halfstack {
             body: null,
         }
 
-        const result = await handle(context)
+        const result = await handler(context)
         if (result instanceof Response) return result
         if (!contentType || contentType === 'application/json') return new JSONResponse(result)
         if (contentType === 'text/plain') return new TextResponse(result as BodyInit)
@@ -164,8 +183,11 @@ export default class Halfstack {
     }
 
     async #handleAPIDocs() {
-        docPageBlob ??= await fetch(import.meta.resolve('./swagger.html')).then(response => response.blob())
-        return new Response(docPageBlob)
+        docPage ??=
+            (await fetch(import.meta.resolve('./swagger.html'))
+                .then(response => response.text()))
+                .replace('{{DOC_PATH}}', this.config.docPath)
+        return new HTMLResponse(docPage)
     }
 
     async #handleOpenAPI() {
@@ -188,10 +210,10 @@ export default class Halfstack {
     }
 
     addRoute(route: Route ): void
-    addRoute(meta: RouteMeta, handle: LooseHandler): void
-    addRoute(route: Route, handle?: LooseHandler) {
-        if (handle) {
-            route.handle = handle
+    addRoute(meta: RouteMeta, handler: Handler): void
+    addRoute(route: Route, handler?: Handler) {
+        if (handler) {
+            route.handler = handler
         }
 
         if(!route.path.startsWith('/')) throw new Error('Path must start with /')
@@ -205,7 +227,9 @@ export default class Halfstack {
         this.#middlewareList.push(fn)
     }
 
-    addRouter() {}
+    addRouter(router: Router) {
+        this.routerList.push(router)
+    }
 }
 
 function convertType(input: string, targetType: string) {
@@ -223,21 +247,54 @@ function convertType(input: string, targetType: string) {
     }
 }
 
+interface RouterConfig {
+    prefix: string
+    exclude?: string[]
+    handler?: Handler
+}
 export class Router {
-    constructor(prefix = '') {
+    config: Required<RouterConfig>
+    routeList: Route[] = []
+
+    constructor(config: RouterConfig)
+    constructor(prefix: string, config: Omit<RouterConfig, 'prefix'>)
+    constructor(prefix: string | RouterConfig, config?: Omit<RouterConfig, 'prefix'>) {
+        if(config) {
+            (config as RouterConfig).prefix = prefix as string
+        } else {
+            config = prefix as RouterConfig
+        }
+
+        prefix = (config as RouterConfig).prefix as string
+        if(!prefix?.startsWith('/')) throw new Error('prefix must start with /')
+
+        config.exclude ??= []
+
+        this.config = config as Required<RouterConfig>
+        if (config.handler) {
+            this.addRoute({
+                path: '/',
+                handler: config.handler,
+            })
+        }
+    }
+
+    addRoute(route: Route) {
+        route.path = this.config.prefix + route.path
+        this.routeList.push(route)
     }
 }
 
 export type Async<T> = Promise<T> | T
 
-interface LooseHandler  {
+interface Handler  {
     (context: HalfContext): Async<unknown>
 }
-interface Handler extends LooseHandler{
+interface TightHandler extends Handler {
     (context: HalfContext): Async<Response>
 }
-export interface Middleware extends Handler {
-    (context: HalfContext, next: Handler): Async<Response>
+export interface Middleware extends TightHandler {
+    (context: HalfContext, next: TightHandler): Async<Response>
 }
 export class TextResponse extends Response {
     constructor(text: BodyInit) {
