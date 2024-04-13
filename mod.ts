@@ -61,7 +61,11 @@ export default class Halfstack {
 
             if (!/.(js)|(ts)$/.test(name)) continue
 
+            console.debug('load module', fullPath)
+            debugger
             const parseTask = await import(fullPath).then((module: Record<string, LooseHandler>) => {
+                console.debug('load module done', module)
+                debugger
                 for(const handle of Object.values(module)) {
                     if(!('route' in handle)) continue
                     this.addRoute(handle.route as RouteMeta, handle)
