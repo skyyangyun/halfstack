@@ -52,7 +52,7 @@ export default class Halfstack {
         const tasks = []
         for await (const entry of Deno.readDir(path)) {
             const { name, isDirectory } = entry
-            const fullPath = `${path}/${name}`
+            const fullPath = `file://${path}/${name}`
 
             if (isDirectory) {
                 tasks.push(this.#loadRoutes(fullPath))
@@ -62,7 +62,7 @@ export default class Halfstack {
             if (!/.(js)|(ts)$/.test(name)) continue
 
             console.debug('load module', fullPath)
-            debugger
+
             const parseTask = await import(fullPath).then((module: Record<string, LooseHandler>) => {
                 console.debug('load module done', module)
                 debugger
