@@ -11,7 +11,7 @@ interface RouteMeta {
     parameters?: any[]
 }
 interface Route extends RouteMeta {
-    handle: Handler
+    handle: LooseHandler
 }
 
 interface HalfstackConfig {
@@ -19,11 +19,15 @@ interface HalfstackConfig {
     apiDirectory?: string
 }
 
+interface HalfContext {
+    request: Request
+}
+
 let docPageBlob: Blob
 export default class Halfstack {
     #httpServer?: Deno.HttpServer
     routeList: Route[] = []
-    config: Record<string, any>
+    config: HalfstackConfig
 
     constructor(config: HalfstackConfig = {}) {
         this.config = config = {
@@ -83,11 +87,9 @@ export default class Halfstack {
     }
 
     #handleMiddleware(request: Request) {
-        const inner: Handler = (context: any) => this.#handleRequest(context.request)
-        const outer = this.#middlewareList.reduce(
-            (next: Handler, middleware) =>
-                (context) => middleware(context, next),
-            inner)
+        const inner: Handler = (context: HalfContext) => this.#handleRequest(context.request)
+        const reducer = (next: Handler, middleware: Middleware) => (context: HalfContext) => middleware(context, next)
+        const outer = this.#middlewareList.reduce(reducer, inner)
         return outer({request})
     }
 
@@ -95,10 +97,9 @@ export default class Halfstack {
         const url = new URL(request.url)
         const { pathname } = url
 
-        let params: Record<string, any> | undefined = undefined
+        let params: Record<string, string> | undefined = undefined
         // path filter
         let list = this.routeList.filter(({ path }) => {
-            // if(path === '/hello/{name}') debugger
             const regexp = new RegExp(`^${path.replaceAll(/\{(\w+)}/g, '(?<$1>[^/]+)')}(?:\/)?$`);
             const match = pathname.match(regexp);
             if(!match) return false
@@ -135,11 +136,11 @@ export default class Halfstack {
                 switch (_in) {
                     case 'path':
                         if(params) {
-                            params[name] = convertType(params[name], type)
+                            (params[name] as any) = convertType(params[name], type)
                         }
                         break;
                     case 'query':
-                        search[name] = convertType(search[name], type)
+                        (search[name] as any) = convertType(search[name], type)
                 }
             }
         }
@@ -147,9 +148,9 @@ export default class Halfstack {
         const { handle } = matched
         const context = {
             request,
-            params,
-            search,
-            query: search,
+            params: params as Record<string, any> | undefined,
+            search: search as Record<string, any>,
+            query: search as Record<string, any>,
             data,
             body: null,
         }
@@ -157,8 +158,8 @@ export default class Halfstack {
         const result = await handle(context)
         if (result instanceof Response) return result
         if (!contentType || contentType === 'application/json') return new JSONResponse(result)
-        if (contentType === 'text/plain') return new TextResponse(result)
-        if (contentType === 'text/html') return new HTMLResponse(result)
+        if (contentType === 'text/plain') return new TextResponse(result as BodyInit)
+        if (contentType === 'text/html') return new HTMLResponse(result as BodyInit)
         throw new Error('没有转换器')
     }
 
@@ -230,13 +231,13 @@ export class Router {
 export type Async<T> = Promise<T> | T
 
 interface LooseHandler  {
-    (context: any): Async<any>
+    (context: HalfContext): Async<unknown>
 }
 interface Handler extends LooseHandler{
-    (context: any): Async<Response>
+    (context: HalfContext): Async<Response>
 }
-export interface Middleware {
-    (context: any, next: Handler): Async<Response>
+export interface Middleware extends Handler {
+    (context: HalfContext, next: Handler): Async<Response>
 }
 export class TextResponse extends Response {
     constructor(text: BodyInit) {
