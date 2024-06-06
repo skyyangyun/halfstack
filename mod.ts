@@ -166,6 +166,7 @@ export default class Halfstack {
 
         const { handler } = matched
         const context = {
+            pathname,
             request,
             params: params as Record<string, any> | undefined,
             search: search as Record<string, any>,
@@ -297,33 +298,42 @@ export interface Middleware extends TightHandler {
     (context: HalfContext, next: TightHandler): Async<Response>
 }
 export class TextResponse extends Response {
-    constructor(text: BodyInit) {
-        super(text, {
-            headers: {
-                "Content-Type": "text/plain"
-            }
-        });
+    constructor(text?: BodyInit, options?: ResponseInit) {
+        super(text, options);
+        this.headers.set("Content-Type", "text/plain")
     }
 }
 
 export class JSONResponse<T> extends Response {
-    constructor(data: T) {
-        super(JSON.stringify(data), {
-            headers: {
-                "Content-Type": "application/json"
-            }
-        });
+    constructor(data?: T, options?: ResponseInit) {
+        super(JSON.stringify(data), options);
+        this.headers.set("Content-Type", "application/json")
     }
 }
 
 export class HTMLResponse extends Response {
-    constructor(html: BodyInit) {
-        super(html, {
-            headers: {
-                "Content-Type": "text/html"
-            }
-        });
+    constructor(html?: BodyInit, options?: ResponseInit) {
+        super(html, options);
+        this.headers.set("Content-Type", "text/html")
     }
+}
+
+export function createTextResponse(text?: BodyInit, options?: ResponseInit) {
+    const response = new Response(text, options)
+    response.headers.set("Content-Type", "text/plain")
+    return response
+}
+
+export function createJSONResponse<T>(data?: T, options?: ResponseInit) {
+    const response = new Response(JSON.stringify(data), options)
+    response.headers.set("Content-Type", "application/json")
+    return response
+}
+
+export function createHTMLResponse(html?: BodyInit, options?: ResponseInit) {
+    const response = new Response(html, options)
+    response.headers.set("Content-Type", "text/html")
+    return response
 }
 
 
