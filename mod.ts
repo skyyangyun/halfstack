@@ -14,26 +14,35 @@ interface Route extends RouteMeta {
     handler: Handler
 }
 
+export interface HalfstackPlugin {
+    name: string,
+    version?: string,
+    onCreated?: (halfstack: Halfstack) => void
+}
+
 interface HalfstackConfig {
     docPath?: string
     apiDir?: string | { dir: string, prefix: string}
+    plugins?: any[]
 }
 
 interface HalfContext {
     request: Request
 }
 
+
 let docPage: string
 export default class Halfstack {
     #httpServer?: Deno.HttpServer
     routerList: Router[] = []
-    routeList: Route[] = []
+    routeList: Array<Route | Router> = []
     config: Required<HalfstackConfig>
 
-    constructor(config: HalfstackConfig = {}) {
+    constructor(config: HalfstackConfig) {
         this.config = config = {
             docPath: '/',
             apiDir: 'api',
+            plugins: [],
             ...config
         }
 
@@ -53,6 +62,9 @@ export default class Halfstack {
         ;[apiDir!].forEach(({dir, prefix}) => {
             this.loadRoutes(`${Deno.cwd()}/${dir}`, prefix)
         })
+        const { plugins } = config
+        if (!Array.isArray(plugins)) throw new TypeError('plugins must be an array')
+        plugins.forEach(plugin => plugin.onCreated?.(this))
     }
 
     async loadRoutes(path: string, prefix = '') {
@@ -114,7 +126,6 @@ export default class Halfstack {
         if (router) {
             list = router.routeList
         }
-        debugger
 
         // path filter
         list ??= this.routeList.filter(({ path }) => {
@@ -231,6 +242,11 @@ export default class Halfstack {
     addRouter(router: Router) {
         this.routerList.push(router)
     }
+
+    static defaultRoute() {
+        return new Response(null,{status: STATUS_CODE.NotFound})
+    }
+    defaultRoute = Halfstack.defaultRoute
 }
 
 function convertType(input: string, targetType: string) {
@@ -258,15 +274,15 @@ export class Router {
     routeList: Route[] = []
 
     constructor(config: RouterConfig)
-    constructor(prefix: string, config: Omit<RouterConfig, 'prefix'>)
+    constructor(prefix: string, config?: Omit<RouterConfig, 'prefix'>)
     constructor(prefix: string | RouterConfig, config?: Omit<RouterConfig, 'prefix'>) {
         if(config) {
             (config as RouterConfig).prefix = prefix as string
         } else {
-            config = prefix as RouterConfig
+            config = typeof prefix === 'object' ? prefix as RouterConfig : { prefix }
         }
-
         prefix = (config as RouterConfig).prefix as string
+
         if(!prefix?.startsWith('/')) throw new Error('prefix must start with /')
 
         config.exclude ??= []
